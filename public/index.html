@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple WebRTC DataChannel</title>
+    <script type="text/javascript" src="/socket.io/socket.io.js"></script>
+    <script type="text/javascript" src="/adapter.js"></script>
+    <script type="text/javascript" src="/simple-webrtc-datachannel.js"></script>
+</head>
+<body>
+
+    <script type="text/javascript">
+        var simpleDataChannel = new SimpleWebRTCDataChannel('http://'+location.host, 'test');
+        simpleDataChannel.on('connect', function (ev) {
+            console.log(ev.data.peerId, 'connected');
+        });
+        simpleDataChannel.on('disconnect', function (ev) {
+            console.log(ev.data.peerId, 'disconnected');
+        });
+    </script>
+</body>
+</html>
