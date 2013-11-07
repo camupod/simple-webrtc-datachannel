@@ -28,12 +28,14 @@ io.sockets.on('connection', function (socket) {
             console.error(error);
             return;
         }
-        console.log(data);
         if (data.to) {
-            io.sockets.sockets[data.to].send(JSON.stringify({
-                from: socket.id,
-                message: data.message
-            }));
+            var to = io.sockets.sockets[data.to];
+            if (to) {
+                to.send(JSON.stringify({
+                    from: socket.id,
+                    message: data.message
+                }));
+            }
         }
     });
 });

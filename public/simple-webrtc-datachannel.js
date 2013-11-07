@@ -121,8 +121,16 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
 
         this.send = function (data) {
             if (dataChannel && dataChannel.readyState === 'open') {
-                dataChannel.send(data);
+                console.log(dataChannel.bufferedAmount);
+                try {
+                    dataChannel.send(data);
+                    return true;
+                } catch (err) {
+                    console.log(err);
+                    return false;
+                }
             }
+            return false;
         };
 
         this.close = function () {
@@ -183,6 +191,7 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
 
                 case 'closed':
                 case 'disconnected':
+                    delete connections[peerId];
                     me.fire('disconnect', {
                         peerId: peerId
                     });
@@ -213,7 +222,11 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
                 console.log('data channel closed!');
             });
             dataChannel.addEventListener('message', function (event) {
-                console.log(event.data);
+                //console.log(event);
+                me.fire('message', {
+                    peerId: peerId,
+                    message: event.data
+                });
             });
         }
 
