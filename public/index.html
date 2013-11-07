@@ -6,7 +6,7 @@
     <script type="text/javascript" src="/adapter.js"></script>
     <script type="text/javascript" src="/simple-webrtc-datachannel.js"></script>
     <style type="text/css">
-
+        a, img { display: block; }
     </style>
 </head>
 <body>
@@ -19,6 +19,7 @@
         simpleDataChannel.on('disconnect', function (ev) {
             console.log(ev.data.peerId, 'disconnected');
         });
+
 
         var currentMessage = {};
         simpleDataChannel.on('message', function (event) {
@@ -51,30 +52,53 @@
                         var finalMessage = currentMessage[data.peerId];
                         delete currentMessage[data.peerId];
                         if (finalMessage.info.type.indexOf('image') > -1) {
-                            embedImg(finalMessage.info.type, finalMessage.data);
+                            embedImg(finalMessage.info, finalMessage.data);
                         } else if (finalMessage.info.type.indexOf('video') > -1) {
-                            embedVideo(finalMessage.info.type, finalMessage.data);
+                            embedVideo(finalMessage.info, finalMessage.data);
+                        } else {
+                            var blob = new Blob([finalMessage.data], {type: finalMessage.info.type});
+                            embedDownloadLink(finalMessage.info, blob);
                         }
                     }
                 }
             }
         });
 
-        function embedImg(type, data) {
-            var blob = new Blob([data], { type: type });
+        function embedImg(info, data) {
+            var blob = new Blob([data], { type: info.type });
             var img = new Image();
             img.src = URL.createObjectURL(blob);
             document.body.appendChild(img);
+            embedDownloadLink(info, blob);
         }
 
-        function embedVideo(type, data) {
-            var blob = new Blob([data], { type: type });
+        function embedVideo(info, data) {
+            var blob = new Blob([data], { type: info.type });
             var video = document.createElement('video');
             video.autoplay = true;
             video.loop = true;
             video.controls = true;
             video.src = URL.createObjectURL(blob);
             document.body.appendChild(video);
+            embedDownloadLink(info, blob);
+        }
+
+        function embedDownloadLink(info, blob) {
+            var a = document.createElement('a');
+            a.download = info.name;
+            a.href = URL.createObjectURL(blob);
+            a.innerHTML = 'download '+info.name+' ('+toHumanReadableSize(info.size)+')'
+            document.body.appendChild(a);
+        }
+
+        function toHumanReadableSize(bytes) {
+            var twopowten = 1024;
+            var KB = bytes/twopowten;
+            var MB = bytes/(twopowten*twopowten);
+            var GB = bytes/(twopowten*twopowten*twopowten);
+            return GB >= 1 ? GB.toFixed(1) + 'GB' :
+                   MB >= 1 ? MB.toFixed(1) + 'MB' :
+                   KB.toFixed(1) + 'KB';
         }
 
         function writeBuffer(intoBuffer, fromBuffer, offset) {
