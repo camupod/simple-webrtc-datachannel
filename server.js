@@ -8,14 +8,15 @@ app.use(express.static(__dirname + '/public'));
 server.listen(8000);
 
 io.sockets.on('connection', function (socket) {
-    socket.on('join', function (room) {
+    socket.on('join', function (room, name) {
         console.log('client joined '+room);
+        socket.name = name + '-' + socket.id.substr(0, 5);
         socket.join(room);
         var peerIds = io.sockets.clients(room)
             .filter(function (s) { return s.id !== socket.id; })
-            .map(function (s) { return s.id; });
+            .map(function (s) { return { id: s.id, name: s.name }; });
         socket.emit('peers', peerIds);
-        socket.broadcast.to(room).emit('peer', socket.id);
+        socket.broadcast.to(room).emit('peer', { id: socket.id, name: socket.name });
     });
     socket.on('leave', function (room) {
         socket.leave(room);

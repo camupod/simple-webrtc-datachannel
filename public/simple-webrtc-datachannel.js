@@ -5,11 +5,12 @@ function EventTarget() {
         handlers[type].push(handler);
     };
     this.off = function (type, handler) {
-        var typeHandlers = handlers[type],
-            i,
-            len;
+        var i, len,
+            typeHandlers = handlers[type];
 
         if (typeHandlers) {
+            // if handler is not specified, remove all 
+            // handlers of the given type
             if (!handler) {
                 typeHandlers.length = 0;
                 return;
@@ -23,16 +24,15 @@ function EventTarget() {
         }
     };
     this.fire = function (type, data) {
-        var typeHandlers,
-            i,
-            len,
+        var i, len,
+            typeHandlers,
             event = {
                 type: type,
                 data: data
             };
 
         // if there are handlers for the event, call them in order
-        typeHandlers = handlers[event.type];
+        typeHandlers = handlers[type];
         if (typeHandlers) {
             for (i = 0, len = typeHandlers.length; i < len; i++) {
                 if (typeHandlers[i]) {
@@ -43,7 +43,7 @@ function EventTarget() {
     };
 }
 
-function SimpleWebRTCDataChannel(socketIOHost, room) {
+function SimpleWebRTCDataChannel(socketIOHost, roomname, username) {
     var socket = io.connect(socketIOHost),
         connections = {};
     var me = this;
@@ -53,12 +53,20 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
 
     this.connections = connections;
 
-    this.send = function (message) {
+    this.broadcast = function (message) {
         for (var c in connections) {
             connections[c].send(message);
         }
     };
 
+    this.send = function (to, message) {
+        connections[to].send(message);
+    };
+
+    this.getPeer = function (id) {
+        console.log(id, connections)
+        return connections[id];
+    };
 
     // existing peers
     socket.on('peers', function (peers) {
@@ -69,18 +77,18 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
     socket.on('peer', addConnection);
 
     socket.on('connect', function () {
-        socket.emit('join', room);
+        socket.emit('join', roomname, username);
     });
 
-    function addConnection(peerId) {
-        if (!connections[peerId]) {
-            connections[peerId] = new Connection(peerId);
+    function addConnection(peer) {
+        if (!connections[peer.id]) {
+            connections[peer.id] = new Connection(peer);
         }
     }
 
-    function offerConnection(peerId) {
-        if (!connections[peerId]) {
-            connections[peerId] = new Connection(peerId, true);
+    function offerConnection(peer) {
+        if (!connections[peer.id]) {
+            connections[peer.id] = new Connection(peer, true);
         }
     }
 
@@ -93,10 +101,13 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
         socket.send(json);
     }
 
-    function Connection(peerId, sendOffer) {
-        this.peerId = peerId;
+    function Connection(peer, sendOffer) {
+        this.id = peer.id;
+        this.name = peer.name;
+        var peerId = peer.id;
         var connection = this;
         var peerConnection, dataChannel;
+        var sendQueue = [];
 
         createConnection();
         if (sendOffer) {
@@ -121,9 +132,8 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
 
         this.send = function (data) {
             if (dataChannel && dataChannel.readyState === 'open') {
-                console.log(dataChannel.bufferedAmount);
                 try {
-                    dataChannel.send(data);
+                    attemptSend(data);
                     return true;
                 } catch (err) {
                     console.log(err);
@@ -137,6 +147,24 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
             dataChannel.close();
             peerConnection.close();
         };
+
+        function attemptSend(data) {
+            if (dataChannel.bufferedAmount) {
+                console.log('buffer... ', dataChannel.bufferedAmount);
+                sendQueue.push(data);
+                setTimeout(attemptSend, 10);
+            } else {
+                if (!data) {
+                    if (sendQueue.length) {
+                        data = sendQueue.shift();
+                    } else {
+                        return;
+                    }
+                }
+                console.log('sending ', data.byteLength || data.length);
+                dataChannel.send(data);
+            }
+        }
 
         function createOffer() {
             var success = function (desc) {
@@ -185,16 +213,16 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
             switch (peerConnection.iceConnectionState) {
                 case 'connected':
                     me.fire('connect', {
-                        peerId: peerId
+                        peer: peer
                     });
                     break;
 
                 case 'closed':
                 case 'disconnected':
-                    delete connections[peerId];
                     me.fire('disconnect', {
-                        peerId: peerId
+                        peer: peer
                     });
+                    delete connections[peerId];
                     break;
             }
         }
@@ -224,7 +252,7 @@ function SimpleWebRTCDataChannel(socketIOHost, room) {
             dataChannel.addEventListener('message', function (event) {
                 //console.log(event);
                 me.fire('message', {
-                    peerId: peerId,
+                    peer: peer,
                     message: event.data
                 });
             });

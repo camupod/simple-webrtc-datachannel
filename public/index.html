@@ -6,150 +6,157 @@
     <script type="text/javascript" src="/adapter.js"></script>
     <script type="text/javascript" src="/simple-webrtc-datachannel.js"></script>
     <style type="text/css">
-        a, img { display: block; }
+        body, html {
+            margin: 0;
+            overflow: hidden;
+            background: #232325;
+            color: #ddd;
+            font-family: Consolas, courier;
+        }
+        .chat-messages {
+            position: absolute;
+            overflow: auto;
+            top: 0;
+            left: 0;
+            bottom: 32px;
+            right: 0;
+            padding: 10px;
+            font-size: 12px;
+            white-space: pre;
+        }
+        .big-input .chat-messages {
+            bottom: 64px;
+        }
+        .chat-input {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            background: #434345;
+            color: #eff;
+            border: 0;
+            resize: none;
+            box-sizing: border-box;
+            margin: 0;
+        }
+        .big-input .chat-input {
+            height: 64px;
+        }
+        .chat-input:focus {
+            outline-color: rgb(0,255,0);
+        }
+        .chat-message-info {
+            font-weight: bold;
+            color: #4aa;
+        }
+        .chat-message-info-self {
+            color: #c44;
+        }
+        .chat-notice {
+            color: #aaa;
+        }
     </style>
 </head>
 <body>
+    <div class="chat-messages"></div>
+    <textarea class="chat-input"></textarea>
     <script type="text/javascript">
-        var MAX_PACKET_SIZE = 1200;
-        var simpleDataChannel = new SimpleWebRTCDataChannel('http://'+location.host, 'test');
-        simpleDataChannel.on('connect', function (ev) {
-            console.log(ev.data.peerId, 'connected');
-        });
-        simpleDataChannel.on('disconnect', function (ev) {
-            console.log(ev.data.peerId, 'disconnected');
-        });
+        var roomname = getRoomName(),
+            username = 'robot',
+            inputEl = document.querySelector('.chat-input'),
+            messagesEl = document.querySelector('.chat-messages'),
+            simpleDataChannel = new SimpleWebRTCDataChannel('http://'+location.host, roomname, username);
 
-
-        var currentMessage = {};
+        simpleDataChannel.on('connect', function (event) {
+            console.log(event.data.peer, 'connected');
+            addNotice(this.getPeer(event.data.peer.id).name + ' joined');
+        });
+        simpleDataChannel.on('disconnect', function (event) {
+            console.log(event.data.peer, 'disconnected');
+            addNotice(this.getPeer(event.data.peer.id).name + ' left');
+        });
         simpleDataChannel.on('message', function (event) {
-            //console.log(event)
-            var data = event.data,
-                message;
-            if (!currentMessage[data.peerId]) {
-                try {
-                    message = JSON.parse(data.message);
-                    //console.log(message);
-                    if (message.file) {
-                        currentMessage[data.peerId] = {
-                            info: message.file,
-                            data: new ArrayBuffer(message.file.size),
-                            offset: 0
-                        };
-                    }
-                } catch (e) {
-                    // not json
-                    console.log(data, e)
-                }
-            } else {
-                //console.log(data);
-                message = data.message;
-                if (message instanceof ArrayBuffer) {
-                    writeBuffer(currentMessage[data.peerId].data, message, currentMessage[data.peerId].offset);
-                    currentMessage[data.peerId].offset += message.byteLength;
-                } else {
-                    if (message === 'end') {
-                        var finalMessage = currentMessage[data.peerId];
-                        delete currentMessage[data.peerId];
-                        if (finalMessage.info.type.indexOf('image') > -1) {
-                            embedImg(finalMessage.info, finalMessage.data);
-                        } else if (finalMessage.info.type.indexOf('video') > -1) {
-                            embedVideo(finalMessage.info, finalMessage.data);
-                        } else {
-                            var blob = new Blob([finalMessage.data], {type: finalMessage.info.type});
-                            embedDownloadLink(finalMessage.info, blob);
-                        }
-                    }
-                }
-            }
+            console.log(event.data)
+            addMessage(this.getPeer(event.data.peer.id), event.data.message);
         });
 
-        function embedImg(info, data) {
-            var blob = new Blob([data], { type: info.type });
-            var img = new Image();
-            img.src = URL.createObjectURL(blob);
-            document.body.appendChild(img);
-            embedDownloadLink(info, blob);
-        }
-
-        function embedVideo(info, data) {
-            var blob = new Blob([data], { type: info.type });
-            var video = document.createElement('video');
-            video.autoplay = true;
-            video.loop = true;
-            video.controls = true;
-            video.src = URL.createObjectURL(blob);
-            document.body.appendChild(video);
-            embedDownloadLink(info, blob);
-        }
-
-        function embedDownloadLink(info, blob) {
-            var a = document.createElement('a');
-            a.download = info.name;
-            a.href = URL.createObjectURL(blob);
-            a.innerHTML = 'download '+info.name+' ('+toHumanReadableSize(info.size)+')'
-            document.body.appendChild(a);
-        }
-
-        function toHumanReadableSize(bytes) {
-            var twopowten = 1024;
-            var KB = bytes/twopowten;
-            var MB = bytes/(twopowten*twopowten);
-            var GB = bytes/(twopowten*twopowten*twopowten);
-            return GB >= 1 ? GB.toFixed(1) + 'GB' :
-                   MB >= 1 ? MB.toFixed(1) + 'MB' :
-                   KB.toFixed(1) + 'KB';
-        }
-
-        function writeBuffer(intoBuffer, fromBuffer, offset) {
-            var fromView = new DataView(fromBuffer);
-            var intoView = new DataView(intoBuffer, offset, fromBuffer.byteLength);
-            for (var i = 0, l = fromBuffer.byteLength; i < l; ++i) {
-                intoView.setUint8(i, fromView.getUint8(i));
+        inputEl.addEventListener('keydown', function (event) {
+            if (event.keyCode === 13) {
+                if (event.shiftKey) {
+                    return;
+                }
+                if (this.value.trim()) {
+                    sendMessage(this.value);
+                    this.value = '';
+                }
+                event.preventDefault();
             }
-        }
-
-        function sendFile(fileInfo, data) {
-            var bufferView, start = 0;
-            simpleDataChannel.send(JSON.stringify({
-                file: fileInfo
-            }));
-            while (start < data.byteLength) {
-                bufferView = data.slice(start, start + Math.min(MAX_PACKET_SIZE, data.byteLength - start));
-                //console.dir(bufferView);
-                simpleDataChannel.send(bufferView);
-                start += MAX_PACKET_SIZE;
-            }
-            simpleDataChannel.send('end');
-        }
-
-        function cancel(event) {
-            event.preventDefault();
-        }
-
-        window.addEventListener('dragover', cancel);
-        window.addEventListener('dragenter', cancel);
-        window.addEventListener('drop', function (event) {
-            var files = event.dataTransfer.files;
-
-            [].forEach.call(files, function (file) {
-                var reader = new FileReader();
-                console.log(file);
-                reader.addEventListener('progress', function(event) {
-                    //console.log('loaded file', this, file);
-                    //simpleDataChannel.send(this);
-                    console.log(this.result.byteLength);
-                });
-                reader.addEventListener('loadend', function(event) {
-                    //console.log('loaded file', this, file);
-                    //simpleDataChannel.send(this);
-                    sendFile(file, this.result);
-                });
-                reader.readAsArrayBuffer(file);
-            });
-
-            cancel(event);
         });
+        inputEl.addEventListener('keyup', function (event) {
+            if (this.clientHeight < this.scrollHeight) {
+                document.body.classList.add('big-input');
+            }
+        });
+        inputEl.focus();
+
+        window.addEventListener('hashchange', function () {
+            location.reload();
+        });
+
+        function addNotice(notice) {
+            var noticeEl = document.createElement('div');
+            noticeEl.classList.add('chat-notice');
+            noticeEl.textContent = notice + ' ('+date()+')';
+            appendChatElement(noticeEl);
+        }
+
+        function addMessage(peer, message) {
+            var messageEl = document.createElement('div'),
+                messageInfoEl = document.createElement('span'),
+                messageContentEl = document.createElement('span');
+            messageEl.classList.add('chat-message');
+            messageInfoEl.classList.add('chat-message-info');
+            messageContentEl.classList.add('chat-message-content');
+            if (peer === true) {
+                peer = { name: username };
+                messageInfoEl.classList.add('chat-message-info-self');
+            }
+            messageInfoEl.textContent = peer.name + ' ('+date()+'): ';
+            messageContentEl.textContent = message;
+            messageEl.appendChild(messageInfoEl);
+            messageEl.appendChild(messageContentEl);
+            appendChatElement(messageEl);
+        }
+
+        function appendChatElement(el) {
+            var shouldScroll = false;
+            if (messagesEl.scrollTop === messagesEl.scrollHeight - messagesEl.clientHeight) {
+                shouldScroll = true;
+            }
+            messagesEl.appendChild(el);
+            if (shouldScroll) {
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+        }
+
+        function sendMessage(message) {
+            simpleDataChannel.broadcast(message);
+            addMessage(true, message);
+        }
+
+        function getRoomName() {
+            var name = location.hash.substr(1) || prompt('Enter a room name');
+            location.hash = name;
+            return name;
+        }
+
+        function date() {
+            var d = new Date;
+            return padZero(d.getHours()) + ':' + padZero(d.getMinutes()) + ':' + padZero(d.getSeconds());
+        }
+
+        function padZero(n) {
+            return n < 10 ? '0'+n : ''+n;
+        }
     </script>
 </body>
 </html>

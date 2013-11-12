@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple WebRTC DataChannel</title>
+    <script type="text/javascript" src="/socket.io/socket.io.js"></script>
+    <script type="text/javascript" src="/adapter.js"></script>
+    <script type="text/javascript" src="/simple-webrtc-datachannel.js"></script>
+    <style type="text/css">
+        a, img { display: block; }
+    </style>
+</head>
+<body>
+    <script type="text/javascript">
+        var MAX_PACKET_SIZE = 1200;
+        var simpleDataChannel = new SimpleWebRTCDataChannel('http://'+location.host, 'test');
+        simpleDataChannel.on('connect', function (ev) {
+            console.log(ev.data.peerId, 'connected');
+        });
+        simpleDataChannel.on('disconnect', function (ev) {
+            console.log(ev.data.peerId, 'disconnected');
+        });
+
+
+        var currentMessage = {};
+        simpleDataChannel.on('message', function (event) {
+            //console.log(event)
+            var data = event.data,
+                message;
+            if (!currentMessage[data.peerId]) {
+                try {
+                    message = JSON.parse(data.message);
+                    //console.log(message);
+                    if (message.file) {
+                        currentMessage[data.peerId] = {
+                            info: message.file,
+                            data: new ArrayBuffer(message.file.size),
+                            offset: 0
+                        };
+                    }
+                } catch (e) {
+                    // not json
+                    console.log(data, e)
+                }
+            } else {
+                //console.log(data);
+                message = data.message;
+                if (message instanceof ArrayBuffer) {
+                    writeBuffer(currentMessage[data.peerId].data, message, currentMessage[data.peerId].offset);
+                    currentMessage[data.peerId].offset += message.byteLength;
+                } else {
+                    if (message === 'end') {
+                        var finalMessage = currentMessage[data.peerId];
+                        delete currentMessage[data.peerId];
+                        if (finalMessage.info.type.indexOf('image') > -1) {
+                            embedImg(finalMessage.info, finalMessage.data);
+                        } else if (finalMessage.info.type.indexOf('video') > -1) {
+                            embedVideo(finalMessage.info, finalMessage.data);
+                        } else {
+                            var blob = new Blob([finalMessage.data], {type: finalMessage.info.type});
+                            embedDownloadLink(finalMessage.info, blob);
+                        }
+                    }
+                }
+            }
+        });
+
+        function embedImg(info, data) {
+            var blob = new Blob([data], { type: info.type });
+            var img = new Image();
+            img.src = URL.createObjectURL(blob);
+            document.body.appendChild(img);
+            embedDownloadLink(info, blob);
+        }
+
+        function embedVideo(info, data) {
+            var blob = new Blob([data], { type: info.type });
+            var video = document.createElement('video');
+            video.autoplay = true;
+            video.loop = true;
+            video.controls = true;
+            video.src = URL.createObjectURL(blob);
+            document.body.appendChild(video);
+            embedDownloadLink(info, blob);
+        }
+
+        function embedDownloadLink(info, blob) {
+            var a = document.createElement('a');
+            a.download = info.name;
+            a.href = URL.createObjectURL(blob);
+            a.innerHTML = 'download '+info.name+' ('+toHumanReadableSize(info.size)+')'
+            document.body.appendChild(a);
+        }
+
+        function toHumanReadableSize(bytes) {
+            var twopowten = 1024;
+            var KB = bytes/twopowten;
+            var MB = bytes/(twopowten*twopowten);
+            var GB = bytes/(twopowten*twopowten*twopowten);
+            return GB >= 1 ? GB.toFixed(1) + 'GB' :
+                   MB >= 1 ? MB.toFixed(1) + 'MB' :
+                   KB.toFixed(1) + 'KB';
+        }
+
+        function writeBuffer(intoBuffer, fromBuffer, offset) {
+            var fromView = new DataView(fromBuffer);
+            var intoView = new DataView(intoBuffer, offset, fromBuffer.byteLength);
+            for (var i = 0, l = fromBuffer.byteLength; i < l; ++i) {
+                intoView.setUint8(i, fromView.getUint8(i));
+            }
+        }
+
+        function cancel(event) {
+            event.preventDefault();
+        }
+
+        window.addEventListener('dragover', cancel);
+        window.addEventListener('dragenter', cancel);
+        window.addEventListener('drop', function (event) {
+            var files = event.dataTransfer.files;
+            [].forEach.call(files, loadFile);
+            cancel(event);
+        });
+
+        function loadChunk(file, start, end, callback) {
+            var reader = new FileReader();
+            var blob = file.slice(start, end);
+            reader.addEventListener('load', function () {
+                callback(start, end, this.result);
+            });
+            reader.readAsArrayBuffer(blob);
+        }
+
+        function loadFile(file) {
+            var chunkSize = MAX_PACKET_SIZE;
+            var fileSize = (file.size - 1);
+
+            simpleDataChannel.broadcast(JSON.stringify({
+                file: file
+            }));
+
+            for(var start = 0; start < fileSize; start += chunkSize) {
+                loadChunk(file, start, Math.min(fileSize, start + chunkSize), function (start, end, data) {
+                    simpleDataChannel.broadcast(data);
+                    if (end === fileSize) {
+                        simpleDataChannel.broadcast('end');
+                    }
+                });
+            }
+        }
+    </script>
+</body>
+</html>
