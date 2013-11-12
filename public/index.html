@@ -18,16 +18,17 @@
             overflow: auto;
             top: 0;
             left: 0;
-            bottom: 32px;
+            bottom: 50px;
             right: 0;
             padding: 10px;
             font-size: 12px;
             white-space: pre;
         }
         .big-input .chat-messages {
-            bottom: 64px;
+            bottom: 100px;
         }
         .chat-input {
+            height: 50px;
             position: absolute;
             bottom: 0;
             width: 100%;
@@ -37,9 +38,10 @@
             resize: none;
             box-sizing: border-box;
             margin: 0;
+            font-family: Consolas, courier;
         }
         .big-input .chat-input {
-            height: 64px;
+            height: 100px;
         }
         .chat-input:focus {
             outline-color: rgb(0,255,0);
@@ -64,18 +66,21 @@
             username = 'robot',
             inputEl = document.querySelector('.chat-input'),
             messagesEl = document.querySelector('.chat-messages'),
-            simpleDataChannel = new SimpleWebRTCDataChannel('http://'+location.host, roomname, username);
+            simpleDataChannel = new SimpleWebRTCDataChannel('http://'+location.host, roomname, username),
+            numPeers = 0;
 
         simpleDataChannel.on('connect', function (event) {
-            console.log(event.data.peer, 'connected');
+            numPeers++;
+            //console.log(event.data.peer, 'connected');
             addNotice(this.getPeer(event.data.peer.id).name + ' joined');
         });
         simpleDataChannel.on('disconnect', function (event) {
-            console.log(event.data.peer, 'disconnected');
+            numPeers--;
+            //console.log(event.data.peer, 'disconnected');
             addNotice(this.getPeer(event.data.peer.id).name + ' left');
         });
         simpleDataChannel.on('message', function (event) {
-            console.log(event.data)
+            //console.log(event.data)
             addMessage(this.getPeer(event.data.peer.id), event.data.message);
         });
 
@@ -93,6 +98,7 @@
         });
         inputEl.addEventListener('keyup', function (event) {
             if (this.clientHeight < this.scrollHeight) {
+                messagesEl.scrollTop = messagesEl.scrollHeight;
                 document.body.classList.add('big-input');
             }
         });
@@ -105,7 +111,7 @@
         function addNotice(notice) {
             var noticeEl = document.createElement('div');
             noticeEl.classList.add('chat-notice');
-            noticeEl.textContent = notice + ' ('+date()+')';
+            noticeEl.textContent = ''+date()+' - ' + notice;
             appendChatElement(noticeEl);
         }
 
@@ -139,8 +145,12 @@
         }
 
         function sendMessage(message) {
+            messagesEl.scrollTop = messagesEl.scrollHeight;
             simpleDataChannel.broadcast(message);
             addMessage(true, message);
+            if (numPeers === 0) {
+                addNotice('nobody is listening...');
+            }
         }
 
         function getRoomName() {

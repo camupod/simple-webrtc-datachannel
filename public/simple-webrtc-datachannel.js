@@ -64,8 +64,15 @@ function SimpleWebRTCDataChannel(socketIOHost, roomname, username) {
     };
 
     this.getPeer = function (id) {
-        console.log(id, connections)
         return connections[id];
+    };
+
+    this.getPeers = function () {
+        var c, peers = [];
+        for (c in connections) {
+            peers.push(connections[c]);
+        }
+        return peers;
     };
 
     // existing peers
@@ -119,6 +126,7 @@ function SimpleWebRTCDataChannel(socketIOHost, roomname, username) {
             if (data.from === peerId) {
                 var message = data.message;
                 if (message.candidate) {
+                    console.log(JSON.stringify(message.candidate))
                     peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
                 }
                 if (message.description) {
@@ -174,24 +182,25 @@ function SimpleWebRTCDataChannel(socketIOHost, roomname, username) {
                     description: desc
                 });
             };
-            peerConnection.createOffer(success, function () {});
+            var fail = function () {};
+            peerConnection.createOffer(success, fail);
         }
         function createAnswer() {
-            peerConnection.createAnswer(gotDescription);
+            peerConnection.createAnswer(gotDescription, function () {});
         }
 
         function createConnection() {
-            if (webrtcDetectedBrowser !== 'chrome' || webrtcDetectedVersion < 31) {
-                //alert('webrtc is :( on your browser. try again in a newer browser maybe?');
-                //return;
-            }
             var peerConnectionConstraint = {
                 optional: [{
                     DtlsSrtpKeyAgreement: true
-                }]
+                }],
+                mandatory: {
+                    OfferToReceiveAudio: false,
+                    OfferToReceiveVideo: false
+                }
             };
             var dataConstraint = {
-                reliable : true
+                reliable: true
             };
             var config = {
                 iceServers: [{
@@ -228,9 +237,18 @@ function SimpleWebRTCDataChannel(socketIOHost, roomname, username) {
         }
 
         function gotICECandidate(event) {
-            if (event.candidate) {
+            var candidate = event.candidate;
+            if (candidate) {
+                // firefox can't JSON.stringify mozRTCIceCandidate objects apparently...
+                if (webrtcDetectedBrowser === 'firefox') {
+                    candidate = {
+                        sdpMLineIndex: candidate.sdpMLineIndex,
+                        sdpMid: candidate.sdpMid,
+                        candidate: candidate.candidate
+                    };
+                }
                 send(peerId, {
-                    candidate: event.candidate
+                    candidate: candidate
                 });
             }
         }
