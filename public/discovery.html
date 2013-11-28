@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple WebRTC DataChannel</title>
+    <script type="text/javascript" src="/socket.io/socket.io.js"></script>
+    <script type="text/javascript" src="/event-target.js"></script>
+    <script type="text/javascript" src="/data-connection.js"></script>
+    <style type="text/css">
+    </style>
+</head>
+<body>
+    <script type="text/javascript">
+        var socket = io.connect('http://' + location.host);
+        var myId;
+        socket.on('connect', function () {
+            console.log('connected');
+        });
+        socket.on('id', function (id) {
+            myId = id;
+        });
+        var connections = {};
+        socket.on('msg', function (id, data) {
+            console.log(data)
+            if (data.offer) {
+                console.log('got an offer');
+                var dataConnection = new DataConnection();
+                dataConnection.on('answer', function (event) {
+                    socket.emit('msg', id, { answer: event.data });
+                });
+                dataConnection.on('candidate', function (event) {
+                    socket.emit('msg', id, { candidate: event.data });
+                });
+                dataConnection.on('message', handleDataConnectionMessage);
+                dataConnection.on('connect', function (event) {
+                    console.log('connected!!!')
+                });
+                dataConnection.on('datachannelopen', function (event) {
+                    console.log('datachannelopen!!!')
+                    this.send('hello');
+                });
+                dataConnection.setDescription(data.offer);
+                dataConnection.createAnswer();
+                connections[id] = dataConnection;
+            }
+            if (data.answer) {
+                console.log('got an answer');
+                connections[id].setDescription(data.answer);
+            }
+            if (data.candidate) {
+                console.log('got a candidate');
+                connections[id].addCandidate(data.candidate);
+            }
+        });
+        socket.on('peer', function (id) {
+            console.log(id)
+            var dataConnection = new DataConnection();
+            dataConnection.on('offer', function (event) {
+                socket.emit('msg', id, { offer: event.data });
+            });
+            dataConnection.on('candidate', function (event) {
+                socket.emit('msg', id, { candidate: event.data });
+            });
+            dataConnection.on('message', handleDataConnectionMessage);
+            dataConnection.on('connect', function (event) {
+                console.log('connected!!!')
+            });
+            dataConnection.on('datachannelopen', function (event) {
+                console.log('datachannelopen!!!')
+                var peers = [];
+                for (var c in connections) {
+                    peers.push(c);
+                }
+                this.send(JSON.stringify({ peers: peers }));
+            });
+            dataConnection.createOffer();
+            connections[id] = dataConnection;
+        });
+
+        function handleDataConnectionMessage(event) {
+            var data, 
+                dataConnection = this;
+            try {
+                data = JSON.parse(event.data);
+            } catch (e) {
+                data = event.data;
+            }
+            if (data.peers) {
+                data.peers.forEach(function (id) {
+                    addPeer(id, dataConnection, true);
+                });
+            }
+            if (data.to) {
+                if (connections[data.to]) {
+                    connections[data.to].send(JSON.stringify(data.message));
+                } else {
+                    console.error('no connection exists with id (to): ' + data.to);
+                }
+            }
+            if (data.from) {
+                if (connections[data.from]) {
+                    if (data.offer) {
+                        console.log('got an offer from '+data.from);
+                        addPeer(data.from, dataConnection, false);
+                    }
+                    if (data.answer) {
+                        console.log('got an answer from '+data.from);
+                        connections[data.from].setDescription(data.answer);
+                    }
+                    if (data.candidate) {
+                        console.log('got a candidate from '+data.from);
+                        connections[data.from].addCandidate(data.candidate);
+                    }
+                } else {
+                    console.error('no connection exists with id (from): ' + data.from);
+                }
+            }
+            console.log(data);
+        }
+
+        function addPeer(id, dc, createOffer) {
+            var dataConnection = new DataConnection();
+            dataConnection.on('offer', function (event) {
+                dc.send(JSON.stringify({ to: id, message: { from: myId, offer: event.data } }));
+            });
+            dataConnection.on('answer', function (event) {
+                dc.send(JSON.stringify({ to: id, message: { from: myId, answer: event.data } }));
+            });
+            dataConnection.on('candidate', function (event) {
+                dc.send(JSON.stringify({ to: id, message: { from: myId, candidate: event.data } }));
+            });
+            dataConnection.on('message', handleDataConnectionMessage);
+            dataConnection.on('connect', function (event) {
+                console.log('connected!!!')
+            });
+            dataConnection.on('datachannelopen', function (event) {
+                console.log('datachannelopen!!!')
+                this.send('BAM connected!!!');
+            });
+            if (createOffer) {
+                dataConnection.createOffer();
+            }
+            connections[id] = dataConnection;
+        }
+    </script>
+</body>
+</html>

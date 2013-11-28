@@ -1,48 +1,3 @@
-function EventTarget() {
-    var handlers = {};
-    this.on = function (type, handler) {
-        handlers[type] = handlers[type] || [];
-        handlers[type].push(handler);
-    };
-    this.off = function (type, handler) {
-        var i, len,
-            typeHandlers = handlers[type];
-
-        if (typeHandlers) {
-            // if handler is not specified, remove all 
-            // handlers of the given type
-            if (!handler) {
-                typeHandlers.length = 0;
-                return;
-            }
-            for (i = 0, len = typeHandlers.length; i < len; i++) {
-                if (typeHandlers[i] === handler) {
-                    typeHandlers.splice(i, 1);
-                    break;
-                }
-            }
-        }
-    };
-    this.fire = function (type, data) {
-        var i, len,
-            typeHandlers,
-            event = {
-                type: type,
-                data: data
-            };
-
-        // if there are handlers for the event, call them in order
-        typeHandlers = handlers[type];
-        if (typeHandlers) {
-            for (i = 0, len = typeHandlers.length; i < len; i++) {
-                if (typeHandlers[i]) {
-                    typeHandlers[i].call(this, event);
-                }
-            }
-        }
-    };
-}
-
 function SimpleWebRTCDataChannel(socketIOHost, roomname, username) {
     var socket = io.connect(socketIOHost),
         connections = {};
@@ -55,48 +10,111 @@ function SimpleWebRTCDataChannel(socketIOHost, roomname, username) {
 
     this.broadcast = function (message) {
         for (var c in connections) {
-            connections[c].send(message);
+            connections[c].dataConnection.send(message);
         }
     };
 
     this.send = function (to, message) {
-        connections[to].send(message);
+        connections[to].dataConnection.send(message);
     };
 
     this.getPeer = function (id) {
-        return connections[id];
+        return connections[id].peer;
     };
 
     this.getPeers = function () {
         var c, peers = [];
         for (c in connections) {
-            peers.push(connections[c]);
+            peers.push(connections[c].peer);
         }
         return peers;
     };
 
     // existing peers
     socket.on('peers', function (peers) {
-        peers.forEach(offerConnection);
+        peers.forEach(addPeerOffer);
     });
 
     // a new peer connects
-    socket.on('peer', addConnection);
+    socket.on('peer', addPeer);
 
     socket.on('connect', function () {
         socket.emit('join', roomname, username);
     });
 
-    function addConnection(peer) {
-        if (!connections[peer.id]) {
-            connections[peer.id] = new Connection(peer);
+    socket.on('message', function (json) {
+        var data = JSON.parse(json),
+            connection = connections[data.from].dataConnection;
+        console.log(data)
+        if (connection) {
+            var message = data.message;
+            console.log(message)
+            if (message.candidate) {
+                connection.addCandidate(message.candidate);
+            }
+            if (message.description) {
+                connection.setDescription(message.description);
+            }
+            if (message.offer) {
+                connection.createAnswer();
+            }
         }
+    });
+
+    function addPeer(peer) {
+        var connection;
+        if (!connections[peer.id]) {
+            console.log(peer)
+            connection =  {
+                dataConnection: new DataConnection(),
+                peer: peer
+            };
+            bindConnectionEvents(connection);
+            connections[peer.id] = connection;
+        }
+        return connections[peer.id];
     }
 
-    function offerConnection(peer) {
-        if (!connections[peer.id]) {
-            connections[peer.id] = new Connection(peer, true);
-        }
+    function addPeerOffer(peer) {
+        var connection = addPeer(peer);
+        connection.dataConnection.createOffer();
+    }
+
+    function bindConnectionEvents(connection) {
+        var dataConnection = connection.dataConnection;
+        dataConnection.on('offer', function (event) {
+            send(connection.peer.id, { offer: true, description: event.data });
+        });
+        dataConnection.on('candidate', function (event) {
+            send(connection.peer.id, { candidate: event.data });
+        });
+        dataConnection.on('answer', function (event) {
+            send(connection.peer.id, { answer:true, description: event.data });
+        });
+        dataConnection.on('connect', function (event) {
+            me.fire('connect', {
+                peer: connection.peer
+            });
+        });
+        dataConnection.on('disconnect', function (event) {
+            me.fire('disconnect', {
+                peer: connection.peer
+            });
+            // remove this connection
+            delete connections[connection.peer.id];
+        });
+        dataConnection.on('datachannelopen', function (event) {
+
+        });
+        dataConnection.on('datachannelclose', function (event) {
+
+        });
+        dataConnection.on('message', function (event) {
+            me.fire('message', {
+                peer: connection.peer,
+                message: event.data
+            });
+        });
     }
 
     function send(to, message) {
@@ -108,179 +126,4 @@ function SimpleWebRTCDataChannel(socketIOHost, roomname, username) {
         socket.send(json);
     }
 
-    function Connection(peer, sendOffer) {
-        this.id = peer.id;
-        this.name = peer.name;
-        var peerId = peer.id;
-        var connection = this;
-        var peerConnection, dataChannel;
-        var sendQueue = [];
-
-        createConnection();
-        if (sendOffer) {
-            createDataChannel();
-            createOffer();
-        }
-        socket.on('message', function (json) {
-            var data = JSON.parse(json);
-            if (data.from === peerId) {
-                var message = data.message;
-                if (message.candidate) {
-                    console.log(JSON.stringify(message.candidate))
-                    peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
-                }
-                if (message.description) {
-                    peerConnection.setRemoteDescription(new RTCSessionDescription(message.description));
-                }
-                if (message.offer) {
-                    createAnswer();
-                }
-            }
-        });
-
-        this.send = function (data) {
-            if (dataChannel && dataChannel.readyState === 'open') {
-                try {
-                    attemptSend(data);
-                    return true;
-                } catch (err) {
-                    console.log(err);
-                    return false;
-                }
-            }
-            return false;
-        };
-
-        this.close = function () {
-            dataChannel.close();
-            peerConnection.close();
-        };
-
-        function attemptSend(data) {
-            if (dataChannel.bufferedAmount) {
-                console.log('buffer... ', dataChannel.bufferedAmount);
-                sendQueue.push(data);
-                setTimeout(attemptSend, 10);
-            } else {
-                if (!data) {
-                    if (sendQueue.length) {
-                        data = sendQueue.shift();
-                    } else {
-                        return;
-                    }
-                }
-                console.log('sending ', data.byteLength || data.length);
-                dataChannel.send(data);
-            }
-        }
-
-        function createOffer() {
-            var success = function (desc) {
-                peerConnection.setLocalDescription(new RTCSessionDescription(desc));
-                send(peerId, {
-                    offer: true,
-                    description: desc
-                });
-            };
-            var fail = function () {};
-            peerConnection.createOffer(success, fail);
-        }
-        function createAnswer() {
-            peerConnection.createAnswer(gotDescription, function () {});
-        }
-
-        function createConnection() {
-            var peerConnectionConstraint = {
-                optional: [{
-                    DtlsSrtpKeyAgreement: true
-                }],
-                mandatory: {
-                    OfferToReceiveAudio: false,
-                    OfferToReceiveVideo: false
-                }
-            };
-            var dataConstraint = {
-                reliable: true
-            };
-            var config = {
-                iceServers: [{
-                    url: 'stun:stun.l.google.com:19302'
-                }]
-            };
-            connection.peerConnection = peerConnection = new RTCPeerConnection(config, peerConnectionConstraint);
-            peerConnection.addEventListener('icecandidate', gotICECandidate);
-            peerConnection.addEventListener('iceconnectionstatechange', handleICEConnectionStateChange);
-            peerConnection.addEventListener('datachannel', function (event) {
-                if (event.channel) {
-                    connection.dataChannel = dataChannel = event.channel;
-                    setupDataChannel();
-                }
-            });
-        }
-
-        function handleICEConnectionStateChange(event) {
-            switch (peerConnection.iceConnectionState) {
-                case 'connected':
-                    me.fire('connect', {
-                        peer: peer
-                    });
-                    break;
-
-                case 'closed':
-                case 'disconnected':
-                    me.fire('disconnect', {
-                        peer: peer
-                    });
-                    delete connections[peerId];
-                    break;
-            }
-        }
-
-        function gotICECandidate(event) {
-            var candidate = event.candidate;
-            if (candidate) {
-                // firefox can't JSON.stringify mozRTCIceCandidate objects apparently...
-                if (webrtcDetectedBrowser === 'firefox') {
-                    candidate = {
-                        sdpMLineIndex: candidate.sdpMLineIndex,
-                        sdpMid: candidate.sdpMid,
-                        candidate: candidate.candidate
-                    };
-                }
-                send(peerId, {
-                    candidate: candidate
-                });
-            }
-        }
-
-        function createDataChannel() {
-            connection.dataChannel = dataChannel = peerConnection.createDataChannel('reliable', { reliable: true });
-            setupDataChannel();
-        }
-
-        function setupDataChannel() {
-            dataChannel.addEventListener('open', function () {
-                // on open...
-                console.log('data channel opened!');
-            });
-            dataChannel.addEventListener('close', function () {
-                // on close...
-                console.log('data channel closed!');
-            });
-            dataChannel.addEventListener('message', function (event) {
-                //console.log(event);
-                me.fire('message', {
-                    peer: peer,
-                    message: event.data
-                });
-            });
-        }
-
-        function gotDescription(desc) {
-            peerConnection.setLocalDescription(new RTCSessionDescription(desc));
-            send(peerId, {
-                description: desc
-            });
-        }
-    }
 }
