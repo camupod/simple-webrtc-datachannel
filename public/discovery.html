@@ -9,6 +9,9 @@
     </style>
 </head>
 <body>
+    <button onclick="closeAll()">die</button>
+    <div class="peers"></div>
+    <pre class="messages"></pre>
     <script type="text/javascript">
         var socket = io.connect('http://' + location.host);
         var myId;
@@ -20,10 +23,15 @@
         });
         var connections = {};
         socket.on('msg', function (id, data) {
+            if (id === myId) {
+                alert('got a message from myself derrrp');
+                return;
+            }
             console.log(data)
             if (data.offer) {
                 console.log('got an offer');
                 var dataConnection = new DataConnection();
+                dataConnection.id = id;
                 dataConnection.on('answer', function (event) {
                     socket.emit('msg', id, { answer: event.data });
                 });
@@ -32,11 +40,18 @@
                 });
                 dataConnection.on('message', handleDataConnectionMessage);
                 dataConnection.on('connect', function (event) {
-                    console.log('connected!!!')
+                    console.log('connected to '+id)
+                    updatePeers();
+                });
+                dataConnection.on('disconnect', function (event) {
+                    console.log('disconnected!!!')
+                    delete connections[id];
+                    updatePeers();
                 });
                 dataConnection.on('datachannelopen', function (event) {
                     console.log('datachannelopen!!!')
                     this.send('hello');
+                    sendPeers(dataConnection);
                 });
                 dataConnection.setDescription(data.offer);
                 dataConnection.createAnswer();
@@ -52,8 +67,13 @@
             }
         });
         socket.on('peer', function (id) {
+            if (id === myId) {
+                alert('trying to connect to myself derrrp1');
+                return;
+            }
             console.log(id)
             var dataConnection = new DataConnection();
+            dataConnection.id = id;
             dataConnection.on('offer', function (event) {
                 socket.emit('msg', id, { offer: event.data });
             });
@@ -62,22 +82,39 @@
             });
             dataConnection.on('message', handleDataConnectionMessage);
             dataConnection.on('connect', function (event) {
-                console.log('connected!!!')
+                console.log('connected to '+id)
+                updatePeers();
+            });
+            dataConnection.on('disconnect', function (event) {
+                console.log('disconnected!!!')
+                delete connections[id];
+                updatePeers();
             });
             dataConnection.on('datachannelopen', function (event) {
                 console.log('datachannelopen!!!')
-                var peers = [];
-                for (var c in connections) {
-                    peers.push(c);
-                }
-                this.send(JSON.stringify({ peers: peers }));
+                sendPeers(dataConnection);
             });
             dataConnection.createOffer();
             connections[id] = dataConnection;
         });
 
+        function closeAll() {
+            socket.disconnect();
+            for (var id in connections) {
+                connections[id] && connections[id].close();
+            }
+        }
+
+        function sendPeers(dataConnection) {
+            var peers = [];
+            for (var c in connections) {
+                peers.push(c);
+            }
+            dataConnection.send(JSON.stringify({ peers: peers }));
+        }
+
         function handleDataConnectionMessage(event) {
-            var data, 
+            var data,
                 dataConnection = this;
             try {
                 data = JSON.parse(event.data);
@@ -86,60 +123,121 @@
             }
             if (data.peers) {
                 data.peers.forEach(function (id) {
-                    addPeer(id, dataConnection, true);
+                    if (id !== myId && !connections[id]) {
+                        addPeer(id, dataConnection);
+                    }
                 });
             }
             if (data.to) {
                 if (connections[data.to]) {
+                    //console.log('forwarding message to '+ data.to, data.message);
                     connections[data.to].send(JSON.stringify(data.message));
                 } else {
                     console.error('no connection exists with id (to): ' + data.to);
                 }
             }
             if (data.from) {
+
+                if (data.offer) {
+                    console.log('got an offer from ' + data.from + ' through ' + this.id);
+                    addPeer(data.from, dataConnection, data.offer);
+                }
+
                 if (connections[data.from]) {
-                    if (data.offer) {
-                        console.log('got an offer from '+data.from);
-                        addPeer(data.from, dataConnection, false);
-                    }
                     if (data.answer) {
-                        console.log('got an answer from '+data.from);
+                        console.log('got an answer from' + data.from + ' through ' + this.id);
                         connections[data.from].setDescription(data.answer);
                     }
                     if (data.candidate) {
-                        console.log('got a candidate from '+data.from);
+                        console.log('got a candidate from ' + data.from + ' through ' + this.id);
                         connections[data.from].addCandidate(data.candidate);
                     }
                 } else {
-                    console.error('no connection exists with id (from): ' + data.from);
+                    console.error('got message from ' + data.from + ', but it does not exist!');
                 }
             }
-            console.log(data);
+            addMessage(this.id, event.data);
+            //console.log(data);
         }
 
-        function addPeer(id, dc, createOffer) {
+        function addPeer(id, bridgeConnection, offer) {
+            console.log('trying to make a connection to ' + id + ' through ' + bridgeConnection.id +' createOffer:'+ !offer);
             var dataConnection = new DataConnection();
+            dataConnection.id = id;
             dataConnection.on('offer', function (event) {
-                dc.send(JSON.stringify({ to: id, message: { from: myId, offer: event.data } }));
+                console.log('sending offer to ' + id + ' through ' + bridgeConnection.id);
+                bridgeConnection.send(JSON.stringify({ to: id, message: { from: myId, offer: event.data } }));
             });
             dataConnection.on('answer', function (event) {
-                dc.send(JSON.stringify({ to: id, message: { from: myId, answer: event.data } }));
+                console.log('sending answer to ' + id + ' through ' + bridgeConnection.id);
+                bridgeConnection.send(JSON.stringify({ to: id, message: { from: myId, answer: event.data } }));
             });
             dataConnection.on('candidate', function (event) {
-                dc.send(JSON.stringify({ to: id, message: { from: myId, candidate: event.data } }));
+                console.log('sending candidate to ' + id + ' through ' + bridgeConnection.id);
+                bridgeConnection.send(JSON.stringify({ to: id, message: { from: myId, candidate: event.data } }));
             });
             dataConnection.on('message', handleDataConnectionMessage);
             dataConnection.on('connect', function (event) {
-                console.log('connected!!!')
+                console.log('connected to ' + id + ' through ' + bridgeConnection.id);
+                updatePeers();
             });
             dataConnection.on('datachannelopen', function (event) {
-                console.log('datachannelopen!!!')
+                console.log('datachannelopen!!!');
                 this.send('BAM connected!!!');
+                sendPeers(dataConnection);
             });
-            if (createOffer) {
+            dataConnection.on('disconnect', function (event) {
+                console.log('disconnected!!!');
+                delete connections[id];
+                updatePeers();
+            });
+            if (offer) {
+                dataConnection.setDescription(offer);
+                dataConnection.createAnswer();
+            } else {
                 dataConnection.createOffer();
             }
             connections[id] = dataConnection;
+        }
+
+        function makeEl(name) {
+            return document.createElement(name);
+        }
+
+        function updatePeers() {
+            var peers = document.querySelector('.peers');
+            peers.innerHTML = '';
+            var div = makeEl('div');
+            div.innerText = 'I am ' + myId + ', and I am connected to:';
+            peers.appendChild(div);
+            for (var id in connections) {
+                div = makeEl('div');
+                var input = makeInput(id);
+                div.innerText = id;
+                div.appendChild(input);
+                peers.appendChild(div);
+            }
+        }
+
+        function makeInput(id) {
+            var input = makeEl('input');
+            input.addEventListener('keydown', function (event) {
+                if (event.keyCode === 13) {
+                    connections[id].send(this.value);
+                    this.value = '';
+                    event.preventDefault();
+                }
+            });
+            return input;
+        }
+
+        function addMessage(id, msg) {
+            var messages = document.querySelector('.messages');
+            messages.innerText += id + ': ' + msg + '\n';
+        }
+
+        function createConnectionTo(id) {
+
         }
     </script>
 </body>

@@ -37,15 +37,17 @@ function DataConnection() {
     };
 
     this.close = function () {
-        dataChannel.close();
+        dataChannel && dataChannel.close();
         peerConnection.close();
     };
 
     this.setDescription = function (description) {
+        // console.log('setting description', description);
         peerConnection.setRemoteDescription(new RTCSessionDescription(description));
     };
 
     this.addCandidate = function (candidate) {
+        // console.log(candidate);
         peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     };
 
@@ -82,7 +84,7 @@ function DataConnection() {
 
     function attemptSend(data) {
         if (dataChannel.bufferedAmount) {
-            console.log('buffer... ', dataChannel.bufferedAmount);
+            // console.log('buffer... ', dataChannel.bufferedAmount);
             sendQueue.push(data);
             setTimeout(attemptSend, 10);
         } else {
@@ -93,7 +95,7 @@ function DataConnection() {
                     return;
                 }
             }
-            console.log('sending ', data.byteLength || data.length);
+            // console.log('sending ', data.byteLength || data.length);
             dataChannel.send(data);
         }
     }

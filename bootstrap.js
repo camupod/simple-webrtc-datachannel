@@ -5,7 +5,7 @@ var express = require('express'),
 
 app.use(express.static(__dirname + '/public'));
 
-server.listen(8000);
+server.listen(8888);
 
 io.sockets.on('connection', function (socket) {
     var randomClientId;
