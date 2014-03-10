@@ -103,7 +103,7 @@ function DataConnection() {
     function createConnection() {
         var config = {
             iceServers: [
-                //{ url: 'stun:stun.l.google.com:19302' }
+                { url: 'stun:stun.l.google.com:19302' }
             ]
         };
         connection.peerConnection = peerConnection = new RTCPeerConnection(config, constraints);

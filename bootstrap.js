@@ -12,7 +12,7 @@ io.sockets.on('connection', function (socket) {
     if (io.sockets.clients().length > 1) {
         do {
             randomClientId = getRandomClient();
-        } while(randomClientId === socket.id);
+        } while (randomClientId === socket.id);
         socket.emit('peer', randomClientId);
     }
     socket.emit('id', socket.id);

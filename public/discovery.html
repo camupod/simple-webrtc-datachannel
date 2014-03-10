@@ -2,107 +2,95 @@
 <html>
 <head>
     <title>Simple WebRTC DataChannel</title>
+    <link rel="stylesheet" href="/leaflet/leaflet.css" />
     <script type="text/javascript" src="/socket.io/socket.io.js"></script>
     <script type="text/javascript" src="/event-target.js"></script>
     <script type="text/javascript" src="/data-connection.js"></script>
+    <script type="text/javascript" src="/leaflet/leaflet.js"></script>
+    <script type="text/javascript" src="/leaflet/leaflet-heat.js"></script>
     <style type="text/css">
+        html,body {
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+            height: 100%;
+        }
+        #map { height: 100%; }
     </style>
 </head>
 <body>
+    <div id="map"></div>
     <button onclick="closeAll()">die</button>
     <div class="peers"></div>
     <pre class="messages"></pre>
     <script type="text/javascript">
-        var socket = io.connect('http://' + location.host);
+        var map = L.map('map');
+        var osmUrl='http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+        var osmAttrib='Map data © <a href="http://openstreetmap.org">OpenStreetMap</a> contributors';
+        var osm = new L.TileLayer(osmUrl, {minZoom: 8, maxZoom: 14, attribution: osmAttrib});
+        map.addLayer(osm);
+        var heat = L.heatLayer([], {radius: 15}).addTo(map);
+        var myLocation;
+        var locations = [];
+
+        var socket;
         var myId;
-        socket.on('connect', function () {
-            console.log('connected');
-        });
-        socket.on('id', function (id) {
-            myId = id;
-        });
         var connections = {};
-        socket.on('msg', function (id, data) {
-            if (id === myId) {
-                alert('got a message from myself derrrp');
-                return;
-            }
-            console.log(data)
-            if (data.offer) {
-                console.log('got an offer');
-                var dataConnection = new DataConnection();
-                dataConnection.id = id;
-                dataConnection.on('answer', function (event) {
-                    socket.emit('msg', id, { answer: event.data });
-                });
-                dataConnection.on('candidate', function (event) {
-                    socket.emit('msg', id, { candidate: event.data });
-                });
-                dataConnection.on('message', handleDataConnectionMessage);
-                dataConnection.on('connect', function (event) {
-                    console.log('connected to '+id)
-                    updatePeers();
-                });
-                dataConnection.on('disconnect', function (event) {
-                    console.log('disconnected!!!')
-                    delete connections[id];
-                    updatePeers();
-                });
-                dataConnection.on('datachannelopen', function (event) {
-                    console.log('datachannelopen!!!')
-                    this.send('hello');
-                    sendPeers(dataConnection);
-                });
-                dataConnection.setDescription(data.offer);
-                dataConnection.createAnswer();
-                connections[id] = dataConnection;
-            }
-            if (data.answer) {
-                console.log('got an answer');
-                connections[id].setDescription(data.answer);
-            }
-            if (data.candidate) {
-                console.log('got a candidate');
-                connections[id].addCandidate(data.candidate);
-            }
-        });
-        socket.on('peer', function (id) {
-            if (id === myId) {
-                alert('trying to connect to myself derrrp1');
-                return;
-            }
-            console.log(id)
-            var dataConnection = new DataConnection();
-            dataConnection.id = id;
-            dataConnection.on('offer', function (event) {
-                socket.emit('msg', id, { offer: event.data });
+        function success(position) {
+            var lat = position.coords.latitude,
+                lon = position.coords.longitude;
+            map.setView([lat, lon], 13);
+            var marker = L.marker([lat, lon]).addTo(map);
+            myLocation = {
+                lat: lat,
+                lon: lon
+            };
+            heat.addLatLng(L.latLng(lat, lon));
+
+            socket = io.connect('http://' + location.host);
+            socket.on('connect', function () {
+                console.log('connected');
             });
-            dataConnection.on('candidate', function (event) {
-                socket.emit('msg', id, { candidate: event.data });
-            });
-            dataConnection.on('message', handleDataConnectionMessage);
-            dataConnection.on('connect', function (event) {
-                console.log('connected to '+id)
+            socket.on('id', function (id) {
+                myId = id;
                 updatePeers();
             });
-            dataConnection.on('disconnect', function (event) {
-                console.log('disconnected!!!')
-                delete connections[id];
-                updatePeers();
+            socket.on('msg', function (id, data) {
+                console.log('peer from server-peer: '+id, data);
+                if (data.offer) {
+                    console.log('got an offer');
+                    createPeer(id, data.offer, function (id, msg) {
+                        socket.emit('msg', id, msg);
+                    });
+                }
+                if (data.answer) {
+                    console.log('got an answer');
+                    connections[id].setDescription(data.answer);
+                }
+                if (data.candidate) {
+                    console.log('got a candidate');
+                    connections[id].addCandidate(data.candidate);
+                }
             });
-            dataConnection.on('datachannelopen', function (event) {
-                console.log('datachannelopen!!!')
-                sendPeers(dataConnection);
+            socket.on('peer', function (id) {
+                console.log('peer from server: '+id)
+                createPeer(id, false, function (id, msg) {
+                    socket.emit('msg', id, msg);
+                });
             });
-            dataConnection.createOffer();
-            connections[id] = dataConnection;
-        });
+        }
+        navigator.geolocation.getCurrentPosition(success, function () { });
+
 
         function closeAll() {
             socket.disconnect();
             for (var id in connections) {
                 connections[id] && connections[id].close();
             }
+        }
+
+        function sendLocation(dataConnection) {
+            dataConnection.send(JSON.stringify({ location: myLocation }));
         }
 
         function sendPeers(dataConnection) {
@@ -121,10 +109,22 @@
             } catch (e) {
                 data = event.data;
             }
+            if (data.location) {
+                locations.push(L.circle([data.location.lat, data.location.lon], 500, {
+                    color: 'red',
+                    fillColor: '#f03',
+                    fillOpacity: 0.5
+                }));
+                dataConnection.latLng = L.latLng(data.location.lat, data.location.lon);
+                heat.addLatLng(dataConnection.latLng);
+            }
             if (data.peers) {
+                console.log('got a list of peers:', data.peers);
                 data.peers.forEach(function (id) {
                     if (id !== myId && !connections[id]) {
-                        addPeer(id, dataConnection);
+                        createPeer(id, false, function (id, msg) {
+                            dataConnection.send(JSON.stringify({ to: id, message: msg }));
+                        });
                     }
                 });
             }
@@ -140,7 +140,9 @@
 
                 if (data.offer) {
                     console.log('got an offer from ' + data.from + ' through ' + this.id);
-                    addPeer(data.from, dataConnection, data.offer);
+                    createPeer(data.from, data.offer, function (id, msg) {
+                        dataConnection.send(JSON.stringify({ to: id, message: msg }));
+                    });
                 }
 
                 if (connections[data.from]) {
@@ -160,62 +162,29 @@
             //console.log(data);
         }
 
-        function addPeer(id, bridgeConnection, offer) {
-            console.log('trying to make a connection to ' + id + ' through ' + bridgeConnection.id +' createOffer:'+ !offer);
-            var dataConnection = new DataConnection();
-            dataConnection.id = id;
-            dataConnection.on('offer', function (event) {
-                console.log('sending offer to ' + id + ' through ' + bridgeConnection.id);
-                bridgeConnection.send(JSON.stringify({ to: id, message: { from: myId, offer: event.data } }));
-            });
-            dataConnection.on('answer', function (event) {
-                console.log('sending answer to ' + id + ' through ' + bridgeConnection.id);
-                bridgeConnection.send(JSON.stringify({ to: id, message: { from: myId, answer: event.data } }));
-            });
-            dataConnection.on('candidate', function (event) {
-                console.log('sending candidate to ' + id + ' through ' + bridgeConnection.id);
-                bridgeConnection.send(JSON.stringify({ to: id, message: { from: myId, candidate: event.data } }));
-            });
-            dataConnection.on('message', handleDataConnectionMessage);
-            dataConnection.on('connect', function (event) {
-                console.log('connected to ' + id + ' through ' + bridgeConnection.id);
-                updatePeers();
-            });
-            dataConnection.on('datachannelopen', function (event) {
-                console.log('datachannelopen!!!');
-                this.send('BAM connected!!!');
-                sendPeers(dataConnection);
-            });
-            dataConnection.on('disconnect', function (event) {
-                console.log('disconnected!!!');
-                delete connections[id];
-                updatePeers();
-            });
-            if (offer) {
-                dataConnection.setDescription(offer);
-                dataConnection.createAnswer();
-            } else {
-                dataConnection.createOffer();
-            }
-            connections[id] = dataConnection;
-        }
-
         function makeEl(name) {
             return document.createElement(name);
         }
 
         function updatePeers() {
+            return;
             var peers = document.querySelector('.peers');
             peers.innerHTML = '';
             var div = makeEl('div');
             div.innerText = 'I am ' + myId + ', and I am connected to:';
             peers.appendChild(div);
+            var count = 0;
+
             for (var id in connections) {
                 div = makeEl('div');
                 var input = makeInput(id);
                 div.innerText = id;
                 div.appendChild(input);
                 peers.appendChild(div);
+                count++;
+            }
+            if (!count) {
+                peers.innerText += ' NOBODY!';
             }
         }
 
@@ -232,12 +201,54 @@
         }
 
         function addMessage(id, msg) {
+            return;
             var messages = document.querySelector('.messages');
             messages.innerText += id + ': ' + msg + '\n';
         }
 
-        function createConnectionTo(id) {
+        function createPeer(id, offer, send) {
+            console.log('trying to make a connection to ' + id + ' createOffer:'+ !offer);
+            var dataConnection = new DataConnection();
+            dataConnection.id = id;
+            dataConnection.on('offer', function (event) {
+                send(id, { from: myId, offer: event.data });
+            });
+            dataConnection.on('answer', function (event) {
+                send(id, { from: myId, answer: event.data });
+            });
+            dataConnection.on('candidate', function (event) {
+                send(id, { from: myId, candidate: event.data });
+            });
+            dataConnection.on('datachannelopen', function (event) {
+                sendPeers(dataConnection);
+                sendLocation(dataConnection);
+            });
+            dataConnection.on('message', handleDataConnectionMessage);
+            dataConnection.on('connect', function (event) {
+                updatePeers();
+            });
+            dataConnection.on('disconnect', function (event) {
+                delete connections[id];
+                updatePeers();
+                updateLatLngs();
+            });
+            if (offer) {
+                dataConnection.setDescription(offer);
+                dataConnection.createAnswer();
+            } else {
+                dataConnection.createOffer();
+            }
+            connections[id] = dataConnection;
+        }
 
+        function updateLatLngs() {
+            var latLngs = [L.latLng(myLocation.lat, myLocation.lon)];
+            for (var id in connections) {
+                if (connections[id] && connections[id].latLng) {
+                    latLngs.push(connections[id].latLng);
+                }
+            }
+            heat.setLatLngs(latLngs);
         }
     </script>
 </body>
